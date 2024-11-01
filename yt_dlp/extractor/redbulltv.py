@@ -1,7 +1,5 @@
 from .common import InfoExtractor
-from ..networking.exceptions import HTTPError
 from ..utils import (
-    ExtractorError,
     float_or_none,
 )
 
@@ -50,34 +48,14 @@ class RedBullTVIE(InfoExtractor):
     }]
 
     def extract_info(self, video_id):
-        session = self._download_json(
-            'https://api.redbull.tv/v3/session', video_id,
-            note='Downloading access token', query={
-                'category': 'personal_computer',
-                'os_family': 'http',
+        video = self._download_json(
+            'https://api-player.redbull.com/rbcom/videoresource', video_id, query={
+                'videoId': video_id,
             })
-        if session.get('code') == 'error':
-            raise ExtractorError('{} said: {}'.format(
-                self.IE_NAME, session['message']))
-        token = session['token']
-
-        try:
-            video = self._download_json(
-                'https://api.redbull.tv/v3/products/' + video_id,
-                video_id, note='Downloading video information',
-                headers={'Authorization': token},
-            )
-        except ExtractorError as e:
-            if isinstance(e.cause, HTTPError) and e.cause.status == 404:
-                error_message = self._parse_json(
-                    e.cause.response.read().decode(), video_id)['error']
-                raise ExtractorError(f'{self.IE_NAME} said: {error_message}', expected=True)
-            raise
-
         title = video['title'].strip()
 
         formats, subtitles = self._extract_m3u8_formats_and_subtitles(
-            f'https://dms.redbull.tv/v3/{video_id}/{token}/playlist.m3u8',
+            video['videoUrl'],
             video_id, 'mp4', entry_protocol='m3u8_native', m3u8_id='hls')
 
         for resource in video.get('resources', []):
@@ -123,23 +101,10 @@ class RedBullEmbedIE(RedBullTVIE):  # XXX: Do not subclass from concrete IE
 
     def _real_extract(self, url):
         rrn_id = self._match_id(url)
-        asset_id = self._download_json(
-            'https://edge-graphql.crepo-production.redbullaws.com/v1/graphql',
-            rrn_id, headers={
-                'Accept': 'application/json',
-                'API-KEY': 'e90a1ff11335423998b100c929ecc866',
-            }, query={
-                'query': '''{
-  resource(id: "%s", enforceGeoBlocking: false) {
-    %s
-    %s
-  }
-}''' % (rrn_id, self._VIDEO_ESSENSE_TMPL % 'LiveVideo', self._VIDEO_ESSENSE_TMPL % 'VideoResource'),  # noqa: UP031
-            })['data']['resource']['videoEssence']['attributes']['assetId']
-        return self.extract_info(asset_id)
+        return self.extract_info(rrn_id)
 
 
-class RedBullTVRrnContentIE(InfoExtractor):
+class RedBullTVRrnContentIE(RedBullTVIE):
     _VALID_URL = r'https?://(?:www\.)?redbull\.com/(?P<region>[a-z]{2,3})-(?P<lang>[a-z]{2})/tv/(?:video|live|film)/(?P<id>rrn:content:[^:]+:[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})'
     _TESTS = [{
         'url': 'https://www.redbull.com/int-en/tv/video/rrn:content:live-videos:e3e6feb4-e95f-50b7-962a-c70f8fd13c73/mens-dh-finals-fort-william',
@@ -155,12 +120,10 @@ class RedBullTVRrnContentIE(InfoExtractor):
     def _real_extract(self, url):
         region, lang, rrn_id = self._match_valid_url(url).groups()
         rrn_id += f':{lang}-{region.upper()}'
-        return self.url_result(
-            'https://www.redbull.com/embed/' + rrn_id,
-            RedBullEmbedIE.ie_key(), rrn_id)
+        return self.extract_info(rrn_id)
 
 
-class RedBullIE(InfoExtractor):
+class RedBullIE(RedBullTVIE):
     _VALID_URL = r'https?://(?:www\.)?redbull\.com/(?P<region>[a-z]{2,3})-(?P<lang>[a-z]{2})/(?P<type>(?:episode|film|(?:(?:recap|trailer)-)?video)s|live)/(?!AP-|rrn:content:)(?P<id>[^/?#&]+)'
     _TESTS = [{
         'url': 'https://www.redbull.com/int-en/episodes/grime-hashtags-s02-e04',
@@ -215,9 +178,7 @@ class RedBullIE(InfoExtractor):
             display_id, query={
                 'filter[type]': filter_type,
                 'filter[uriSlug]': display_id,
-                'rb3Schema': 'v1:hero',
+                'rb3Schema': 'v1:videoHero',
             })['data']['id']
 
-        return self.url_result(
-            'https://www.redbull.com/embed/' + rrn_id,
-            RedBullEmbedIE.ie_key(), rrn_id)
+        return self.extract_info(rrn_id)
